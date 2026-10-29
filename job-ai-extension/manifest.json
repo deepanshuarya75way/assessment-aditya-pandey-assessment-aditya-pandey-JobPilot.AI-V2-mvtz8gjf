@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "JobPilot.AI Copilot",
+  "version": "2.0",
+  "description": "Analyze jobs, generate cover letters, and track applications directly from your browser.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://jobpilot-ai-7cqs.onrender.com/api*",
+    "https://*.linkedin.com/*",
+    "https://*.indeed.com/*",
+    "https://*.naukri.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Open JobPilot Copilot"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.linkedin.com/*",
+        "*://*.indeed.com/*",
+        "*://*.naukri.com/*"
+      ],
+      "js": ["content.js"]
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Testing
+coverage/
+htmlcov/
+
+# Build
+build/
+services/ai/test_graph.py
+services/ai/test_company.py
+services/ai/test_resume.py
+services/ai/test_resume_graph.py
+services/ai/test_ranking.py
+services/ai/test_ranking_graph.py
+services/ai/test_job_matcher.py
+services/ai/test_application.py
+services/ai/test_orchestrator.py
+services/ai/test_db.py
+services/ai/test_job_repository.py
+services/ai/test_fastapi_mongo.py
