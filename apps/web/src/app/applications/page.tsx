@@ -89,6 +89,8 @@ function readFiltersFromUrl(): Filters {
     (column) => column.id
   );
 
+  
+
   const readScore = (key: string): string => {
 
     const value = params.get(key);
