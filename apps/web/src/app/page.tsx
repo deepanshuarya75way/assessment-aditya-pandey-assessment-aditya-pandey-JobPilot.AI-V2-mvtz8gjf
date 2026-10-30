@@ -61,7 +61,7 @@ export default function Home() {
 
     try {
       const token = localStorage.getItem("token");
-      const res = await fetch("https://jobpilot-ai-7cqs.onrender.com/api/profile/upload-resume", {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/profile/upload-resume`, {
         method: "POST",
         headers: { "Authorization": `Bearer ${token}` },
         body: formData,
@@ -87,7 +87,7 @@ export default function Home() {
     setIsSaving(true);
     try {
       const token = localStorage.getItem("token");
-      const res = await fetch("https://jobpilot-ai-7cqs.onrender.com/api/profile/update-details", {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/profile/update-details`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
