@@ -31,7 +31,6 @@ async def create_indexes(database):
         ]
     )
 
-    # Supports filtering by stored resume match score.
     await database["applications"].create_index(
         [
             ("user_id", 1),
@@ -39,7 +38,15 @@ async def create_indexes(database):
         ]
     )
 
-    # Saved views are user-specific and ordered by update time.
+    # Company trust score filtering.
+    await database["applications"].create_index(
+        [
+            ("user_id", 1),
+            ("company_trust_score", 1),
+        ]
+    )
+
+    # Saved pipeline views.
     await database["pipeline_views"].create_index(
         [
             ("user_id", 1),

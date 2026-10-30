@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import type { DragEvent } from "react";
-import Link from "next/link";
 import { fetchAPI } from "@/lib/api";
+import Link from "next/link";
 
 const COLUMNS = [
   { id: "saved", title: "Saved", headerColor: "bg-slate-800 text-white", bodyColor: "bg-slate-100/50" },
@@ -15,36 +15,60 @@ const COLUMNS = [
 ] as const;
 
 
-const DEFAULT_FILTERS = {
+type Filters = {
+  search: string;
+  status: string;
+  minMatch: string;
+  maxMatch: string;
+  minTrust: string;
+  maxTrust: string;
+  sortBy: string;
+  sortOrder: "asc" | "desc";
+  page: number;
+  pageSize: number;
+};
+
+
+const DEFAULT_FILTERS: Filters = {
   search: "",
   status: "",
   minMatch: "",
   maxMatch: "",
+  minTrust: "",
+  maxTrust: "",
   sortBy: "updated_at",
-  sortOrder: "desc" as "asc" | "desc",
+  sortOrder: "desc",
   page: 1,
   pageSize: 10,
 };
 
 
-type Filters = typeof DEFAULT_FILTERS;
-
-
 type SavedView = {
   _id: string;
   name: string;
-
   filters: {
     search?: string;
     status?: string;
     min_match?: number | string | null;
     max_match?: number | string | null;
+    min_trust?: number | string | null;
+    max_trust?: number | string | null;
     sort_by?: string;
     sort_order?: "asc" | "desc";
     page?: number;
     page_size?: number;
   };
 };
+
+
+const VALID_SORT_FIELDS = [
+  "updated_at",
+  "created_at",
+  "fit_score",
+  "company",
+  "title",
+  "company_trust_score",
+];
 
 
 function readFiltersFromUrl(): Filters {
@@ -61,21 +85,26 @@ function readFiltersFromUrl(): Filters {
     params.get("page_size") || 10
   );
 
-  const minMatch = params.get("min_match") || "";
-
-  const maxMatch = params.get("max_match") || "";
-
   const validStatuses = COLUMNS.map(
     (column) => column.id
   );
 
-  const validSortFields = [
-    "updated_at",
-    "created_at",
-    "fit_score",
-    "company",
-    "title",
-  ];
+  const readScore = (key: string): string => {
+
+    const value = params.get(key);
+
+    if (value === null || value === "") {
+      return "";
+    }
+
+    const number = Number(value);
+
+    return Number.isFinite(number) &&
+      number >= 0 &&
+      number <= 100
+      ? value
+      : "";
+  };
 
   return {
 
@@ -89,21 +118,15 @@ function readFiltersFromUrl(): Filters {
       ? params.get("status")!
       : "",
 
-    minMatch:
-      minMatch !== "" &&
-      Number(minMatch) >= 0 &&
-      Number(minMatch) <= 100
-        ? minMatch
-        : "",
+    minMatch: readScore("min_match"),
 
-    maxMatch:
-      maxMatch !== "" &&
-      Number(maxMatch) >= 0 &&
-      Number(maxMatch) <= 100
-        ? maxMatch
-        : "",
+    maxMatch: readScore("max_match"),
 
-    sortBy: validSortFields.includes(
+    minTrust: readScore("min_trust"),
+
+    maxTrust: readScore("max_trust"),
+
+    sortBy: VALID_SORT_FIELDS.includes(
       params.get("sort_by") || ""
     )
       ? params.get("sort_by")!
@@ -155,6 +178,14 @@ function buildQuery(filters: Filters): string {
     params.set("max_match", filters.maxMatch);
   }
 
+  if (filters.minTrust !== "") {
+    params.set("min_trust", filters.minTrust);
+  }
+
+  if (filters.maxTrust !== "") {
+    params.set("max_trust", filters.maxTrust);
+  }
+
   return params.toString();
 }
 
@@ -176,6 +207,16 @@ function toSavedViewFilters(filters: Filters) {
       filters.maxMatch === ""
         ? null
         : Number(filters.maxMatch),
+
+    min_trust:
+      filters.minTrust === ""
+        ? null
+        : Number(filters.minTrust),
+
+    max_trust:
+      filters.maxTrust === ""
+        ? null
+        : Number(filters.maxTrust),
 
     sort_by: filters.sortBy,
 
@@ -199,14 +240,6 @@ function fromSavedViewFilters(
     ? saved.status || ""
     : "";
 
-  const validSortFields = [
-    "updated_at",
-    "created_at",
-    "fit_score",
-    "company",
-    "title",
-  ];
-
   return {
 
     search: saved.search || "",
@@ -225,7 +258,19 @@ function fromSavedViewFilters(
         ? ""
         : String(saved.max_match),
 
-    sortBy: validSortFields.includes(
+    minTrust:
+      saved.min_trust === null ||
+      saved.min_trust === undefined
+        ? ""
+        : String(saved.min_trust),
+
+    maxTrust:
+      saved.max_trust === null ||
+      saved.max_trust === undefined
+        ? ""
+        : String(saved.max_trust),
+
+    sortBy: VALID_SORT_FIELDS.includes(
       saved.sort_by || ""
     )
       ? saved.sort_by!
@@ -270,13 +315,41 @@ function getApplicationFitScore(app: any): number {
 }
 
 
+function getCompanyTrustScore(app: any): number | null {
+
+  const value =
+    app?.company_trust_score ??
+    app?.company_trust?.trust_score;
+
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
+  }
+
+  const score = Number(value);
+
+  if (
+    !Number.isFinite(score) ||
+    score < 0 ||
+    score > 100
+  ) {
+    return null;
+  }
+
+  return score;
+}
+
+
 export default function Applications() {
 
   const [applications, setApplications] = useState<any[]>([]);
 
-  const [filters, setFilters] = useState<Filters>(
-    DEFAULT_FILTERS
-  );
+  const [filters, setFilters] = useState<Filters>({
+    ...DEFAULT_FILTERS,
+  });
 
   const [initialized, setInitialized] = useState(false);
 
@@ -290,59 +363,63 @@ export default function Applications() {
 
   const [reloadKey, setReloadKey] = useState(0);
 
-
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
 
   const [selectedViewId, setSelectedViewId] = useState("");
 
   const [viewBusy, setViewBusy] = useState(false);
 
-  const [viewMessage, setViewMessage] = useState<string | null>(
-    null
-  );
+  const [viewMessage, setViewMessage] = useState<string | null>(null);
 
-
-  const minMatchNumber =
-    filters.minMatch === ""
-      ? null
-      : Number(filters.minMatch);
-
-  const maxMatchNumber =
-    filters.maxMatch === ""
-      ? null
-      : Number(filters.maxMatch);
+  const [backfillBusy, setBackfillBusy] = useState(false);
 
 
   const validationError = useMemo(() => {
 
-    if (
-      filters.minMatch !== "" &&
-      (
-        !Number.isFinite(minMatchNumber) ||
-        minMatchNumber! < 0 ||
-        minMatchNumber! > 100
-      )
-    ) {
-      return "Minimum match score must be between 0 and 100.";
-    }
+    const ranges = [
+      {
+        min: filters.minMatch,
+        max: filters.maxMatch,
+        label: "Resume match",
+      },
+      {
+        min: filters.minTrust,
+        max: filters.maxTrust,
+        label: "Company trust",
+      },
+    ];
 
-    if (
-      filters.maxMatch !== "" &&
-      (
-        !Number.isFinite(maxMatchNumber) ||
-        maxMatchNumber! < 0 ||
-        maxMatchNumber! > 100
-      )
-    ) {
-      return "Maximum match score must be between 0 and 100.";
-    }
+    for (const range of ranges) {
 
-    if (
-      minMatchNumber !== null &&
-      maxMatchNumber !== null &&
-      minMatchNumber > maxMatchNumber
-    ) {
-      return "Minimum match score cannot exceed maximum match score.";
+      const min = range.min === ""
+        ? null
+        : Number(range.min);
+
+      const max = range.max === ""
+        ? null
+        : Number(range.max);
+
+      if (
+        min !== null &&
+        (!Number.isFinite(min) || min < 0 || min > 100)
+      ) {
+        return `${range.label} minimum must be between 0 and 100.`;
+      }
+
+      if (
+        max !== null &&
+        (!Number.isFinite(max) || max < 0 || max > 100)
+      ) {
+        return `${range.label} maximum must be between 0 and 100.`;
+      }
+
+      if (
+        min !== null &&
+        max !== null &&
+        min > max
+      ) {
+        return `${range.label} minimum cannot exceed maximum.`;
+      }
     }
 
     return null;
@@ -350,8 +427,8 @@ export default function Applications() {
   }, [
     filters.minMatch,
     filters.maxMatch,
-    minMatchNumber,
-    maxMatchNumber,
+    filters.minTrust,
+    filters.maxTrust,
   ]);
 
 
@@ -380,7 +457,6 @@ export default function Applications() {
 
     const query = buildQuery(filters);
 
-    // Keep filter state in the browser URL.
     const nextUrl =
       `${window.location.pathname}?${query}`;
 
@@ -440,8 +516,6 @@ export default function Applications() {
         );
 
 
-        // Correct an old bookmarked page if records
-        // have since been removed or changed.
         const lastValidPage = Math.max(
           1,
           Number(data.total_pages || 0)
@@ -543,7 +617,7 @@ export default function Applications() {
   // Every filter change resets page to one.
   // ============================================================
 
-  const updateFilter = <K extends Exclude<keyof Filters, "page">>(
+  const updateFilter = <K extends keyof Omit<Filters, "page">>(
     key: K,
     value: Filters[K]
   ) => {
@@ -553,6 +627,8 @@ export default function Applications() {
       [key]: value,
       page: 1,
     }));
+
+    setSelectedViewId("");
 
   };
 
@@ -566,6 +642,65 @@ export default function Applications() {
     setSelectedViewId("");
 
     setViewMessage(null);
+
+  };
+
+
+  // ============================================================
+  // BACKFILL COMPANY TRUST SCORES FOR OLD APPLICATIONS
+  // ============================================================
+
+  const backfillMissingTrustScores = async () => {
+
+    const confirmed = window.confirm(
+      "Calculate missing company trust scores for your existing applications? This may take some time because companies without cached scores need to be analyzed."
+    );
+
+    if (!confirmed) return;
+
+    setBackfillBusy(true);
+
+    setViewMessage(null);
+
+    try {
+
+      const result = await fetchAPI(
+        "/applications/trust/backfill",
+        {
+          method: "POST",
+        }
+      );
+
+      const updated = Number(
+        result.updated_applications || 0
+      );
+
+      const failed = Array.isArray(
+        result.failed_jobs
+      )
+        ? result.failed_jobs.length
+        : 0;
+
+      setViewMessage(
+        `${updated} application(s) updated. ` +
+        (failed > 0
+          ? `${failed} job(s) could not be analyzed. You can retry.`
+          : "Company trust scores are ready.")
+      );
+
+      setReloadKey((current) => current + 1);
+
+    } catch (err: any) {
+
+      setViewMessage(
+        err?.message || "Unable to calculate missing trust scores."
+      );
+
+    } finally {
+
+      setBackfillBusy(false);
+
+    }
 
   };
 
@@ -834,7 +969,6 @@ export default function Applications() {
       ...applications
     ];
 
-    // Optimistic UI update.
     setApplications((current) =>
       current.map((app) =>
         app._id === appId || app.id === appId
@@ -855,7 +989,6 @@ export default function Applications() {
         }
       );
 
-      // Reload the current filtered page after a successful update.
       setReloadKey((current) => current + 1);
 
     } catch (err: any) {
@@ -964,21 +1097,36 @@ export default function Applications() {
 
             </div>
 
-            <button
-              onClick={clearFilters}
-              className="text-sm font-bold text-indigo-700 hover:text-indigo-900 self-start lg:self-auto"
-            >
-              Clear filters
-            </button>
+            <div className="flex flex-wrap gap-2">
+
+              <button
+                disabled={backfillBusy}
+                onClick={backfillMissingTrustScores}
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {backfillBusy
+                  ? "Calculating trust scores..."
+                  : "Calculate missing trust scores"
+                }
+              </button>
+
+              <button
+                onClick={clearFilters}
+                className="text-sm font-bold text-indigo-700 hover:text-indigo-900 px-2"
+              >
+                Clear filters
+              </button>
+
+            </div>
 
           </div>
 
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
 
             {/* KEYWORD SEARCH */}
 
-            <label className="sm:col-span-2 xl:col-span-2">
+            <label className="sm:col-span-2">
 
               <span className="block text-xs font-bold text-slate-600 mb-1.5">
                 Search company, role or location
@@ -1078,10 +1226,52 @@ export default function Applications() {
 
             </label>
 
-          </div>
+
+            {/* MINIMUM TRUST */}
+
+            <label>
+
+              <span className="block text-xs font-bold text-slate-600 mb-1.5">
+                Minimum company trust (%)
+              </span>
+
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={filters.minTrust}
+                onChange={(event) =>
+                  updateFilter("minTrust", event.target.value)
+                }
+                placeholder="0"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"
+              />
+
+            </label>
 
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mt-3">
+            {/* MAXIMUM TRUST */}
+
+            <label>
+
+              <span className="block text-xs font-bold text-slate-600 mb-1.5">
+                Maximum company trust (%)
+              </span>
+
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={filters.maxTrust}
+                onChange={(event) =>
+                  updateFilter("maxTrust", event.target.value)
+                }
+                placeholder="100"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"
+              />
+
+            </label>
+
 
             {/* SORT FIELD */}
 
@@ -1109,6 +1299,10 @@ export default function Applications() {
 
                 <option value="fit_score">
                   Resume match score
+                </option>
+
+                <option value="company_trust_score">
+                  Company trust score
                 </option>
 
                 <option value="company">
@@ -1217,7 +1411,7 @@ export default function Applications() {
 
 
           <p className="mt-3 text-xs text-slate-400">
-            Salary and company trust filters are not shown because those values are not currently stored with tracked applications.
+            Trust filters use the company's saved trust score. Applications without a score are excluded when a trust range is selected. Use the calculate button above to fill missing scores.
           </p>
 
         </section>
@@ -1236,7 +1430,7 @@ export default function Applications() {
               </h2>
 
               <p className="text-xs text-slate-500 mt-1">
-                Save your search, stage, match range, sorting and page size.
+                Save your search, stage, match range, trust range, sorting and page size.
               </p>
 
             </div>
@@ -1328,7 +1522,7 @@ export default function Applications() {
             {selectedView && (
 
               <p className="mt-1 text-xs text-slate-500">
-                Selected: {selectedView.name}. Choose another view to switch pipelines.
+                Selected: {selectedView.name}.
               </p>
 
             )}
@@ -1454,7 +1648,7 @@ export default function Applications() {
           )}
 
 
-        {/* EXISTING KANBAN BOARD */}
+        {/* KANBAN BOARD */}
 
         <div
           className={`flex gap-6 overflow-x-auto pb-8 items-start snap-x custom-scrollbar ${
@@ -1511,7 +1705,7 @@ export default function Applications() {
                     const report = app.application || app;
 
                     const analysis =
-                      report.analysis || app.analysis;
+                      report?.analysis || app?.analysis;
 
                     const jobTitle =
                       app.job?.title ||
@@ -1525,6 +1719,9 @@ export default function Applications() {
 
                     const fitScore =
                       getApplicationFitScore(app);
+
+                    const trustScore =
+                      getCompanyTrustScore(app);
 
 
                     return (
@@ -1550,15 +1747,23 @@ export default function Applications() {
                         </p>
 
 
-                        <div className="flex justify-between items-center mt-2 border-t pt-4 gap-2">
+                        <div className="flex flex-wrap gap-2 mt-2 border-t pt-4">
 
                           <span className="bg-slate-100 text-slate-700 px-3 py-1 rounded-full font-bold text-xs border border-slate-200 group-hover:bg-indigo-50 group-hover:text-indigo-700 transition-colors">
                             Fit: {fitScore}%
                           </span>
 
+                          <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full font-bold text-xs border border-emerald-100">
+                            Trust: {
+                              trustScore === null
+                                ? "Not checked"
+                                : `${trustScore}%`
+                            }
+                          </span>
+
                           <Link
                             href={`/applications/${appId}`}
-                            className="text-indigo-600 hover:text-indigo-800 font-bold text-sm bg-indigo-50 px-3 py-1 rounded-full hover:bg-indigo-100 transition-colors"
+                            className="ml-auto text-indigo-600 hover:text-indigo-800 font-bold text-sm bg-indigo-50 px-3 py-1 rounded-full hover:bg-indigo-100 transition-colors"
                           >
                             Details &rarr;
                           </Link>

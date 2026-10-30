@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.dependencies import get_current_user
+from app.repositories.applications import get_or_calculate_company_trust
+from app.schemas.job import Job
 
 
 router = APIRouter(
@@ -32,6 +34,7 @@ SORT_FIELDS = {
     "fit_score": "application.analysis.fit_score",
     "company": "job.company",
     "title": "job.title",
+    "company_trust_score": "company_trust_score",
 }
 
 
@@ -40,6 +43,12 @@ SCORE_FIELDS = (
     "application.analysis.overall_score",
     "analysis.fit_score",
     "fit_score",
+)
+
+
+TRUST_FIELDS = (
+    "company_trust_score",
+    "company_trust.trust_score",
 )
 
 
@@ -64,6 +73,8 @@ def build_application_query(
     status: str | None,
     min_match: float | None,
     max_match: float | None,
+    min_trust: float | None,
+    max_trust: float | None,
 ) -> dict:
 
     conditions = [
@@ -72,7 +83,7 @@ def build_application_query(
         }
     ]
 
-    # Keyword search: job title, company and location.
+    # Keyword search.
     if search:
 
         safe_search = re.escape(
@@ -111,7 +122,7 @@ def build_application_query(
             "status": status
         })
 
-    # Resume match score range.
+    # Resume match range.
     if min_match is not None or max_match is not None:
 
         score_range = {}
@@ -122,13 +133,32 @@ def build_application_query(
         if max_match is not None:
             score_range["$lte"] = max_match
 
-        # Support the current nested structure and older records.
         conditions.append({
             "$or": [
                 {
                     field: score_range
                 }
                 for field in SCORE_FIELDS
+            ]
+        })
+
+    # Company trust range.
+    if min_trust is not None or max_trust is not None:
+
+        trust_range = {}
+
+        if min_trust is not None:
+            trust_range["$gte"] = min_trust
+
+        if max_trust is not None:
+            trust_range["$lte"] = max_trust
+
+        conditions.append({
+            "$or": [
+                {
+                    field: trust_range
+                }
+                for field in TRUST_FIELDS
             ]
         })
 
@@ -151,6 +181,7 @@ def normalize_saved_filters(
     ).strip()
 
     if len(search) > 120:
+
         raise HTTPException(
             status_code=400,
             detail="Search text cannot exceed 120 characters",
@@ -173,6 +204,7 @@ def normalize_saved_filters(
             return None
 
         try:
+
             score = float(value)
 
         except (TypeError, ValueError):
@@ -201,6 +233,16 @@ def normalize_saved_filters(
         "Maximum match score",
     )
 
+    min_trust = parse_score(
+        filters.get("min_trust"),
+        "Minimum trust score",
+    )
+
+    max_trust = parse_score(
+        filters.get("max_trust"),
+        "Maximum trust score",
+    )
+
     if (
         min_match is not None
         and max_match is not None
@@ -210,6 +252,17 @@ def normalize_saved_filters(
         raise HTTPException(
             status_code=400,
             detail="Minimum match score cannot exceed maximum match score",
+        )
+
+    if (
+        min_trust is not None
+        and max_trust is not None
+        and min_trust > max_trust
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail="Minimum trust score cannot exceed maximum trust score",
         )
 
     sort_by = str(
@@ -270,6 +323,8 @@ def normalize_saved_filters(
         "status": status,
         "min_match": min_match,
         "max_match": max_match,
+        "min_trust": min_trust,
+        "max_trust": max_trust,
         "sort_by": sort_by,
         "sort_order": sort_order,
         "page": page,
@@ -287,7 +342,7 @@ def serialize_view(document: dict) -> dict:
 
 
 # ============================================================
-# SERVER-SIDE APPLICATION FILTERING, SORTING AND PAGINATION
+# APPLICATION FILTERING, SORTING AND PAGINATION
 # ============================================================
 
 @router.get("/pipeline")
@@ -299,6 +354,8 @@ async def get_application_pipeline(
     status: str | None = None,
     min_match: float | None = Query(default=None, ge=0, le=100),
     max_match: float | None = Query(default=None, ge=0, le=100),
+    min_trust: float | None = Query(default=None, ge=0, le=100),
+    max_trust: float | None = Query(default=None, ge=0, le=100),
     sort_by: str = "updated_at",
     sort_order: str = "desc",
     user=Depends(get_current_user),
@@ -320,6 +377,17 @@ async def get_application_pipeline(
         raise HTTPException(
             status_code=400,
             detail="Minimum match score cannot exceed maximum match score",
+        )
+
+    if (
+        min_trust is not None
+        and max_trust is not None
+        and min_trust > max_trust
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail="Minimum trust score cannot exceed maximum trust score",
         )
 
     if sort_by not in SORT_FIELDS:
@@ -346,11 +414,12 @@ async def get_application_pipeline(
         status=status,
         min_match=min_match,
         max_match=max_match,
+        min_trust=min_trust,
+        max_trust=max_trust,
     )
 
     collection = database["applications"]
 
-    # Exact count using the same filters.
     total_count = await collection.count_documents(
         query
     )
@@ -404,7 +473,131 @@ async def get_application_pipeline(
 
 
 # ============================================================
-# LIST USER SAVED PIPELINE VIEWS
+# ONE-TIME BACKFILL FOR EXISTING APPLICATIONS
+# ============================================================
+
+@router.post("/trust/backfill")
+async def backfill_company_trust_scores(
+    request: Request,
+    user=Depends(get_current_user),
+):
+
+    database = request.app.state.database
+
+    applications_collection = database[
+        "applications"
+    ]
+
+    cursor = applications_collection.find({
+        "user_id": user["_id"],
+        "$or": [
+            {
+                "company_trust_score": {
+                    "$exists": False
+                }
+            },
+            {
+                "company_trust_score": None
+            },
+        ],
+    })
+
+    unique_jobs = {}
+
+    # Collect distinct jobs which do not have a saved trust score.
+    async for application in cursor:
+
+        job_data = application.get("job") or {}
+
+        external_id = (
+            application.get("job_external_id")
+            or job_data.get("external_id")
+        )
+
+        source = (
+            application.get("job_source")
+            or job_data.get("source")
+        )
+
+        if not external_id or not source:
+            continue
+
+        key = (external_id, source)
+
+        if key not in unique_jobs:
+            unique_jobs[key] = job_data
+
+    updated_applications = 0
+    processed_jobs = 0
+    failed_jobs = []
+
+    for (external_id, source), job_data in unique_jobs.items():
+
+        try:
+
+            job = Job.model_validate(
+                job_data
+            )
+
+            # This reuses cached job trust where available.
+            trust_data = await get_or_calculate_company_trust(
+                database,
+                job,
+            )
+
+            trust_score = trust_data.get(
+                "trust_score"
+            )
+
+            if trust_score is None:
+                raise ValueError("Trust score missing from report")
+
+            result = await applications_collection.update_many(
+
+                {
+                    "user_id": user["_id"],
+                    "job_external_id": external_id,
+                    "job_source": source,
+                },
+
+                {
+                    "$set": {
+                        "company_trust": trust_data,
+                        "company_trust_score": int(
+                            round(trust_score)
+                        ),
+                    }
+                },
+
+            )
+
+            updated_applications += result.modified_count
+
+            processed_jobs += 1
+
+        except Exception as error:
+
+            failed_jobs.append({
+                "external_id": external_id,
+                "source": source,
+                "error": str(error),
+            })
+
+    return {
+        "success": True,
+        "processed_jobs": processed_jobs,
+        "updated_applications": updated_applications,
+        "failed_jobs": failed_jobs,
+        "message": (
+            "Company trust backfill completed."
+            if not failed_jobs
+            else "Backfill completed with some failures. You can retry."
+        ),
+    }
+
+
+# ============================================================
+# LIST SAVED PIPELINE VIEWS
 # ============================================================
 
 @router.get("/views")
